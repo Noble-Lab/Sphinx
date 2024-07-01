@@ -18,6 +18,28 @@ import sys
 
 
 class hicData():
+    """
+    A class used to hold contact map data, such as HiC and convert from .mcool files
+
+    
+    Attributes
+    __________
+    folder: str
+        A string that identifies where the .mcool files are stored
+    metadata_train: pd.DataFrame
+        A pandas dataframe that contains information about the files for training data examples with columns 'Biosource', 'Assay Type', 'ExperimentSetAccession', 'ProcessedFileHref', 'Total Count', 'Log Total Count'
+    metadata_valid: pd.DataFrame
+        Same formatting as metadata_train except for files in the validation data set
+    metadata_test: pd.DataFrame
+        Same formatting as metadata_train except for files in the test data set
+    resolution: int
+        Resolution of the data to be loaded
+    chromosome: int
+        Chromosome of the data to be loaded. Currently only one chromosome can be loaded at a time. 
+    scale: int
+        The total number of counts 
+
+    """
     def __init__(self, folder, metadata_train, metadata_valid, metadata_test, resolution, chromosome, scale):
         self.folder = folder
         self.metadata_train = metadata_train
@@ -49,16 +71,58 @@ class hicData():
         self.assaytype_dict = self.get_dictionary(metadata["Assay Type"])
         
     def get_dictionary(self, labels):
+        """
+        Makes a dictionary that makes labels to a dictionary with integer labels
+
+
+        Parameters
+        __________
+        labels: list
+            List of labels that need to have associated integer codes
+
+
+        Returns
+        _______
+        dictionary:
+            takes in label and returns integer valued code
+        """
         unique_labels = np.unique(labels)
         return({label: i for i, label in enumerate(unique_labels)})
         
     def get_matrices_unpruned(self, file_names):
+        """
+        Uses the Cooler package to read in cooler files from a list of file names from self.folder
+
+        Parameters
+        __________
+        file_names: list of str
+            List of names to read in from cooler files
+
+        Returns
+        _______
+        list:
+            List of coolers that have been converted into sparse matrices and transformed using the log(x+1) transformation
+        """
         coolers = [cooler.Cooler(f"{self.folder}{fn}::/resolutions/{self.resolution}") for fn in file_names]
         coolers = hicData.get_sparse_matrices(coolers, self.chromosome)
         coolers = hicData.log_plus_one_matrices(coolers)
         return(coolers)
     
     def get_matrices(self, file_names):
+        """
+        Gets matrices from a list of file names, and prunes them
+
+        Parameters
+        __________
+        file_names: list of str
+            List of names to read in from the cooler files.
+
+        Returns: 
+        ________
+        list:
+            List of coolers that have been sparsified, transformed with the log(x+1) transformation, pruned, and normalized.
+        """
+
         coolers = [cooler.Cooler(f"{self.folder}{fn}::/resolutions/{self.resolution}") for fn in file_names]
         coolers = hicData.get_sparse_matrices(coolers, self.chromosome)
         coolers = hicData.log_plus_one_matrices(coolers)
@@ -67,6 +131,23 @@ class hicData():
         return(coolers)
     
     def find_celltype_assay(self, celltype, assay):
+        """
+        Finds the matrix associated with a given celltype and assay along with what data partition it was in
+
+        Parameters:
+        ___________
+        celltype: str
+            The celltype to look for
+        assay: str
+            The assay to look for
+
+        Returns:
+        ________
+        np.array:
+            The observed data 
+        str:
+            name of the data partition it was located in. 
+        """
         obs = None
         metadatas = [self.metadata_train,
                      self.metadata_valid,
@@ -93,6 +174,20 @@ class hicData():
         return ret_obs, ret_name
             
     def get_contact_profile(mat):
+        """
+        Gets the contact decay profile from a matrix by taking the average value along each of the diagonals of the matrix
+
+        Parameters:
+        ___________
+        mat: np.array
+            Matrix to take the contact decay profile of
+
+        Returns:
+        ________
+        np.array: 
+            An array containing the values of the contact decay profile
+        """
+
         start = time.time()
         assert(mat.shape[0] == mat.shape[1])
         n = mat.shape[0]
@@ -102,6 +197,23 @@ class hicData():
         return(avgs)
     
     def make_cdp(self, model, celltype, assay, ax=None, xmin=None, xmax = None, ymin=None, ymax=None):
+        """
+        Creates a plot with the contact decay profile of the contact map
+
+        Parameters:
+        ___________
+        model: DeepMatrixFactorization
+            A model to predict a contact map for the given celltype and assay
+        celltype: str
+            What celltype to make the contact decay profile for
+        assay: str
+            What assay to make the contact decay profile for
+
+        Returns:
+        ________
+        ax:
+            Matplotlib axis containing the plot
+        """
         obs, metadata_name = self.find_celltype_assay(celltype, assay)
         mean_mat = m.mean_model_tensor_cross(celltype, assay).todense().A
         pred_resid = d.plot_matrix(celltype, assay).cpu().detach().numpy()
@@ -128,9 +240,39 @@ class hicData():
         return(ax)
     
     def get_eigenvector(obs):
+        """
+        Gets the eigenvector from a matrix
+
+        Parameters:
+        ___________
+        obs: np.array
+            Matrix to take the eigenvector
+
+        Returns:
+        ________
+        np.array: 
+            An array containing the values of the eigenvector
+        """
         return np.linalg.eig(obs)[1][0] #returns first eigenvector
     
     def make_eigenvector(self, model, celltype, assay, ax=None, xmin=None, xmax = None, ymin=None, ymax=None):
+        """
+        Creates a plot with the eigenvector of the contact map
+
+        Parameters:
+        ___________
+        model: DeepMatrixFactorization
+            A model to predict a contact map for the given celltype and assay
+        celltype: str
+            What celltype to make the contact decay profile for
+        assay: str
+            What assay to make the contact decay profile for
+
+        Returns:
+        ________
+        ax:
+            Matplotlib axis containing the plot
+        """
         obs, metadata_name = self.find_celltype_assay(celltype, assay)
         mean_mat = m.mean_model_tensor_cross(celltype, assay).todense().A
         pred_resid = d.plot_matrix(celltype, assay).cpu().detach().numpy()
@@ -154,6 +296,69 @@ class hicData():
             ax.set_title(f"{celltype} {assay}")
         return(ax)
     
+    def get_insulation(mat, window_size=30):
+        """
+        Gets the insulation score from a matrix
+
+        Parameters:
+        ___________
+        obs: np.array
+            Matrix to take the insulation score
+        window_size: int
+            Size of the window to take the sum of contacts within that distance
+
+        Returns:
+        ________
+        np.array: 
+            An array containing the values of the insulation score
+        """
+        insulation = np.zeros(mat.shape[0] - 2 * window_size + 1)
+        for i in range(mat.shape[0] - 2 * window_size + 1):
+            Y = mat[i:(i + window_size), :]
+            Y = Y[:, (i+window_size):(i + 2*window_size)]
+            insulation[i] = np.mean(Y) 
+        return(insulation)
+    
+    def make_insulation(self, model, celltype, assay, windowsize=30, ax=None, xmin=None, xmax = None, ymin=None, ymax=None):
+         """
+        Creates a plot with the insulation score of the contact map
+
+        Parameters:
+        ___________
+        model: DeepMatrixFactorization
+            A model to predict a contact map for the given celltype and assay
+        celltype: str
+            What celltype to make the insulation score for
+        assay: str
+            What assay to make the insulation score for
+
+        Returns:
+        ________
+        ax:
+            Matplotlib axis containing the plot
+        """
+
+        obs, metadata_name = self.find_celltype_assay(celltype, assay)
+        mean_mat = m.mean_model_tensor_cross(celltype, assay).todense().A
+        pred_resid = model.plot_matrix(celltype, assay).cpu().detach().numpy()
+        pred_mat = pred_resid + mean_mat
+        new_ax = False
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
+            new_ax = True
+        insulation_obs = None
+        if obs is not None:
+            insulation_obs = hicData.get_insulation(obs.A, windowsize)
+        insulation_mean = hicData.get_insulation(mean_mat, windowsize)
+        insulation_pred = hicData.get_insulation(pred_mat, windowsize)
+        if obs is not None:
+            ax.plot(np.arange(len(insulation_obs)) * self.resolution, insulation_obs, c="C0")
+        ax.plot(np.arange(len(insulation_mean)) * self.resolution, insulation_mean, c="C1")
+        ax.plot(np.arange(len(insulation_pred)) * self.resolution, insulation_pred, c="C2")
+        ax.set_ylim(ymin, ymax)
+        ax.set_xlim(xmin, xmax)
+        return(ax, insulation_mean, insulation_pred, insulation_obs)
+
     def get_sparse_matrices(coolers, chromosome):
         return [c.matrix(sparse = True, balance = False).fetch(f"chr{chromosome}").tocsr() for c in coolers]
     
@@ -192,14 +397,23 @@ class hicData():
         return [c / c.sum() * scale for c in matrices]
     
 
-"""
-This class is used to create data loaders using pytorch.
-"""
 class hicDataset(torch.utils.data.Dataset):
     """
-    Initialization function the mean model class. 
-    @Param hicData: A class of hicData to use for the mean model
-    @
+    Generator for contact map data that inherits from torch.utils.data.Dataset
+
+    Attributes:
+    ___________
+    hicData: hicData
+        A hicData object to generate data from
+    split: str
+        Either 'train', 'valid', or 'test', which determines which split to generate examples from
+    batchsize: int
+        How many examples to provide in each batch    
+    fixed_idxs: 
+        a list of indexes where [0] is the first index, and [1] is the second index. The generator will take examples from fixed_idxs each time, rather than generating random new indexes.
+    residual: bool
+        if true, then the mean model is subtracted from the observations. 
+        if false, then raw values from the matrices are provided
     """
     def __init__(self, hicData, split, batchsize=10000, fixed_idxs=None, residual=False):
         self.hicData = hicData
@@ -230,6 +444,15 @@ class hicDataset(torch.utils.data.Dataset):
         self.fixed_idxs = fixed_idxs
     
     def generate_non_diagonal_elements(self, per_exp_batch):
+        """
+        Generates non-diagonal elements to train the model on.
+
+        Parameters:
+        ___________
+        per_exp_batch:int
+            Determines how many examples are chosen to return
+
+        """
         big_batch = int(per_exp_batch * 1.1)
         while True:
             # Make a draw that is greater than 0
@@ -284,13 +507,32 @@ class hicDataset(torch.utils.data.Dataset):
 
 class MeanModel():
     """
-    Initialization function the mean model class. 
-    @Param data: A class of hicData to use for the mean model
+    Class for the cross-mean model. 
+
+    Attributes"
+    ___________
+    data: hicData
+        A hicData object that is used to contain the data for the mean model
     """
     def __init__(self, data):
         self.data = data
     
     def mean_model_tensor_cross(self, celltype, assay) :
+        """
+        Finds the cross average prediction given a celltype and an assay
+
+        Parameters:
+        ___________
+        celltype: str
+            The celltype to take the cross-average prediction for
+        assay: str
+            The assay to take the cross-average prediction for
+
+        Returns:
+        ________
+        np.array:
+            The cross-average prediction 
+        """
         metadata_train = self.data.metadata_train
         log_train_data = self.data.train_data
         mats = [i for i in range(metadata_train.shape[0]) if ((metadata_train["Assay Type"][i] == assay) or (metadata_train["Biosource"][i] == celltype))]
@@ -304,6 +546,14 @@ class MeanModel():
         return(s)
     
     def get_mean_model_dictionary(self):
+        """
+        Provides a dictionary of the mean model calculations so that we don't have to recalculate each time we want a prediction
+
+        Returns:
+        ________
+        dictionary:
+            Maps celltype, assay tuples to the cross-mean average prediction. 
+        """
         metadata_train = self.data.metadata_train
         metadata_valid = self.data.metadata_valid
         celltypes = metadata_train["Biosource"].tolist() + metadata_valid["Biosource"].tolist()
@@ -312,7 +562,14 @@ class MeanModel():
         return(mean_model_precomp)
     
     def get_mean_model_train_loss(self):
-        # raise ValueError("I don't know any other errors to do")
+        """
+        Gets the training loss from the mean model
+
+        Returns:
+        ________
+        float:
+            The training loss of the mean model
+        """
         tse = 0
         for i in range(len(self.data.train_data)):
             celltype = self.data.metadata_train["Biosource"].iloc[i]
@@ -325,7 +582,14 @@ class MeanModel():
         return(tse / len(self.data.train_data))
     
     def get_mean_model_valid_loss2(self):
-        # raise ValueError("I don't know any other errors to do")
+        """
+        Gets the validation loss from the mean model
+
+        Returns:
+        ________
+        float:
+            The validation loss of the mean model
+        """
         tse = 0
         for i in range(len(self.data.valid_data)):
             celltype = self.data.metadata_valid["Biosource"].iloc[i]
@@ -354,6 +618,21 @@ class MeanModel():
         return(tse / len(self.data.valid_data))
     
     def mean_same_celltype(self, celltype, assay):
+        """
+        Finds the celltype average prediction given a celltype and an assay (i.e. when the celltype is the same)
+
+        Parameters:
+        ___________
+        celltype: str
+            The celltype to take the celltype-average prediction for
+        assay: str
+            The assay to take the celltype-average prediction for
+
+        Returns:
+        ________
+        np.array:
+            The celltype-average prediction 
+        """
         metadata_train = self.data.metadata_train
         log_train_data = self.data.train_data
         mats = [i for i in range(metadata_train.shape[0]) if metadata_train["Biosource"][i] == celltype]
@@ -367,6 +646,21 @@ class MeanModel():
         return(s)
     
     def mean_same_assay(self, celltype, assay): 
+        """
+        Finds the assay average prediction given a celltype and an assay (i.e. when the assay is the same)
+
+        Parameters:
+        ___________
+        celltype: str
+            The celltype to take the assay-average prediction for
+        assay: str
+            The assay to take the assay-average prediction for
+
+        Returns:
+        ________
+        np.array:
+            The assay-average prediction 
+        """
         metadata_train = self.data.metadata_train
         log_train_data = self.data.train_data
         mats = [i for i in range(metadata_train.shape[0]) if metadata_train["Assay Type"][i] == assay]
@@ -380,6 +674,9 @@ class MeanModel():
         return(s)
     
     def get_celltype_valid_loss(self, fixed_idxs):
+        """
+        Validation loss for the celltype-mean baseline model
+        """
         idx1 = copy.deepcopy(fixed_idxs[0])
         idx2 = copy.deepcopy(fixed_idxs[1])
         tse = 0
@@ -396,6 +693,9 @@ class MeanModel():
         return(tse / len(self.data.valid_data))
     
     def get_assay_valid_loss(self, fixed_idxs):
+        """
+        Validation loss for the assay-mean baseline model
+        """
         idx1 = copy.deepcopy(fixed_idxs[0])
         idx2 = copy.deepcopy(fixed_idxs[1])
         tse = 0
@@ -414,9 +714,35 @@ class MeanModel():
 class DeepMatrixFactorization(torch.nn.Module):
     """
     Class to run the imputation model
-    @param mean_model_precomp: a dictionary that takes celltype and assay
-        and returns a precomputed mean model
-    @param data: A class of hicData to use for imputation
+
+    Attributes:
+    ___________
+    mean_model_precomp: dictionary
+        Dictionary that takes (celltype, assay) pairs as key and returns a prediction from the mean model. This can be created using MeanModel.get_mean_model_dictionary()
+    data: hicData
+        A hicData object containing data to train and validation on.
+    n_celltype_factor: int
+        Number of celltype factors for the model
+    n_assay_factor: int
+        Number of assay factors
+    n_position_factor: int
+        Number of position factors
+    n_distance_factor: int
+        Number of distance factors
+    n_node: int
+        Number of hidden nodes
+    n_layer: int
+        Number of hidden layers
+    device: str
+        Name of device for pytorch (i.e. a gpu)
+    residual: bool
+        If true: takes the residual of the mean model for training
+        If false: trains on the raw data
+    debug: bool
+        If true: produces more debugging messages
+    droupout: float
+        Percentage of dropout for the model
+
     """
     def __init__(self, mean_model_precomp, data, n_celltype_factor=3,
              n_assay_factor=3, n_position_factor=3, n_distance_factor=3,
@@ -462,7 +788,23 @@ class DeepMatrixFactorization(torch.nn.Module):
             self.dropout = None
         
     """
-    Make a forward pass prediction 
+    Make a forward pass prediction using the Sphinx model
+
+    Parameters:
+    ___________
+    celltype_ids: torch.tensor
+        A tensor of the celltypes that we want to make predictions on
+    assay_ids: torch.tensor
+        A tensor of the assays that we want to make predictions on
+    position_id1s:
+        A tensor of the position 1s that we want to make predictions on 
+    position_id2s:
+        A tensor of the position 2s that we want to make predictions on
+
+    Returns:
+    ________
+    torch.tensor:
+        Tensor of the results of the prediction
     """
     def forward(self, celltype_ids, assay_ids, position_id1s, position_id2s) :
         celltype_factor = self.celltype_factors(celltype_ids)
@@ -496,6 +838,22 @@ class DeepMatrixFactorization(torch.nn.Module):
     
     """
     Function for fitting the model to data
+
+    Parameters:
+        optimizer: torch.Optimizer
+            an optimizer from torch.optim
+        cuda: None
+            legacy parameter to choose the cuda device. This is now done in the initialization of the model.
+        max_epochs: int
+            Number of epochs to train for
+        verbose: bool
+            If true, then increase the verbosity level of the model
+        batchsize: int
+            number of examples to include in each batch
+        save_intermediate_name: str
+            name of output file to export the best model weights at the end of each epoch
+        valid_idxs_fn: str
+            A pickle file with the indexes where [0] is the first index, and [1] is the second index to evaluate the validation set
     """
     def fit(self, optimizer, cuda, max_epochs=1000, verbose=True, batchsize=1000, save_intermediate_name="intermediate", valid_idxs_fn = None):
         train_dataset = hicDataset(self.data, "train", batchsize=batchsize, residual=self.residual)
@@ -556,6 +914,19 @@ class DeepMatrixFactorization(torch.nn.Module):
                 "valid_loss_batches": valid_loss_batches,
                "no_model": no_model})
     
+    """
+    Get the validation loss from the model
+
+    Parameters:
+    ___________
+    valid_idxs_fn: str
+        String containing the path to a pickle file that contains the indexes to evaluate the validation set on
+
+    Returns:
+    ________
+    float:
+        The MSE of the model on valid_idxs_fn
+    """
     def get_valid_loss(self, valid_idxs_fn) :
         if valid_idxs_fn is None:
             return -1
@@ -576,6 +947,16 @@ class DeepMatrixFactorization(torch.nn.Module):
                 total_loss += loss
         return(total_loss / len(valid_loader))
     
+    """
+    Make a prediction for an entire matrix using the Sphinx model
+
+    Parameters:
+    ___________
+    celltype_name: str
+        The name of the celltype to make the prediction for
+    assay_name: str
+        The name of the assay to make the prediction for
+    """
     def plot_matrix(self, celltype_name, assay_name):
         chrom = torch.tensor(0, device=cuda0)
         idx1, idx2 = torch.meshgrid(
